@@ -1,0 +1,47 @@
+# 20240312
+mkdir GRCh38_ensembl
+cd GRCh38_ensembl/
+
+# get gff files and check
+wget -O GRCh38.111.chr.gff3.gz "https://ftp.ensembl.org/pub/release-111/gff3/homo_sapiens/Homo_sapiens.GRCh38.111.chr.gff3.gz" # chromosomes only - use for RNA-seq
+wget -O GRCh38.111.chr.gtf.gz "https://ftp.ensembl.org/pub/release-111/gtf/homo_sapiens/Homo_sapiens.GRCh38.111.chr.gtf.gz" # for splice sites and exons
+zcat GRCh38.111.chr.gtf.gz | cut -f 1 | uniq | less # good
+wget -O GRCh38.111.chr_patch_hapl_scaff.gff3.gz "https://ftp.ensembl.org/pub/release-111/gff3/homo_sapiens/Homo_sapiens.GRCh38.111.chr_patch_hapl_scaff.gff3.gz" # contains all patch regions, haplotypes etc.
+wget -O GRCh38.111.gff3.gz "https://ftp.ensembl.org/pub/release-111/gff3/homo_sapiens/Homo_sapiens.GRCh38.111.gff3.gz" # contains some extra sequence regions, nowhere near as many as chr_patch_hapl... version
+rm GRCh38.111.chr_patch_hapl_scaff.gff3.gz GRCh38.111.gff3.gz
+gunzip GRCh38.111.chr.gff3.gz
+gunzip GRCh38.111.chr.gtf.gz # for splice sites and exons
+# guessing at best genome
+wget -O GRCh38.dna.primary_assembly.fa.gz "https://ftp.ensembl.org/pub/release-111/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.primary_assembly.fa.gz"
+zcat GRCh38.dna.primary_assembly.fa.gz | grep -n "^>" | less
+
+salloc --partition=uoa-compute-priority --ntasks=1 --cpus-per-task=6 --mem=60G --x11=first # had to go back and ask for more mem for hisat2-build
+srun --ntasks=1 --cpus-per-task=6 --pty /bin/bash # can't assume cpus-per-task is inherited
+module load seqtk/1.3
+gunzip GRCh38.dna.primary_assembly.fa.gz
+seqtk subseq -l 60 GRCh38.dna.primary_assembly.fa name.list > genome.fa
+grep -n "^>" genome.fa | less # success
+module unload seqtk
+module load hisat2/2.2.0
+## to use exon and splice-site files hisat2 builds a graph, requires ~200G of ram and several hours
+#hisat2_extract_exons.py GRCh38.111.chr.gtf > exons.bed
+#hisat2_extract_splice_sites.py GRCh38.111.chr.gtf > splice_sites.bed
+#hisat2-build -p 6 --ss splice_sites.bed --exon exons.bed genome.fa genome
+hisat2-build -p 6 genome.fa genome # success
+
+
+# get good, properly connected gff
+cat GRCh38.111.chr.gff3 | cut -f 3 | sort | uniq -c | less # look at counts of features of each type - note, many gene level annotations
+cat GRCh38.111.chr.gff3 | grep "ID=gene:" | grep -v "gene.[0-9]" | less # no records
+cat GRCh38.111.chr.gff3 | less # look for an rRNA gene - has ID=gene: tag
+cat GRCh38.111.chr.gff3 | grep "ID=gene:" | grep "_gene.[0-9]" | less # has ID=gene: tag
+cat GRCh38.111.chr.gff3 | grep "ID=gene:" | grep "ogene.[0-9]" | less # has ID=gene: tag
+# genes identified by tag ID=gene:
+cat GRCh38.111.chr.gff3 | grep "ID=transcript:" | less # many types of txs have tag ID=transcript:
+# idea, do 2 passes, once to get gene- & tx-like records.
+# second pass to 1) filter out exons not part of a named gene, 2) put gene symbols in exon records,
+# 3) put gene names on tx records?
+
+# 20240313
+python3 add_syms_to_gff_exon_recs.py GRCh38.111.chr.gff3 > genome.gff # adds geneids also
+
